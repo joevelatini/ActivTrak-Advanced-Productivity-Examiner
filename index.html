@@ -1,0 +1,631 @@
+import React, { useState, useEffect } from 'react';
+import Papa from 'papaparse';
+import _ from 'lodash';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+
+// ActivTrak colors
+const ACTIVTRAK_PRIMARY = '#0070cd';
+const ACTIVTRAK_SECONDARY = '#00529b';
+const TEXT_COLOR = '#333333';
+const COLORS = ['#0070cd', '#00a0dc', '#29b6f6', '#4fc3f7', '#81d4fa'];
+
+const ActivTrakProductivityExaminer = () => {
+  const [goalHours, setGoalHours] = useState(7.5);
+  const [annualSalary, setAnnualSalary] = useState(60000);
+  const [file, setFile] = useState(null);
+  const [data, setData] = useState(null);
+  const [headers, setHeaders] = useState([]);
+  const [selectedColumns, setSelectedColumns] = useState({
+    productiveHours: '',
+    meetingHours: ''
+  });
+  const [analysisResults, setAnalysisResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  
+  // Function to generate sample analysis with the specified distribution
+  const generateSampleAnalysis = () => {
+    setLoading(true);
+    
+    try {
+      // Create sample data with specified distribution
+      const totalEmployees = 135;
+      
+      // Classification categories with exact counts from your data
+      const classifications = [
+        { classification: "< 5 hrs", count: 5, percentage: (5/135*100).toFixed(1), deltaHours: "12.50", fte: "1.56", monthlyCost: 7800 },
+        { classification: "< 6 hrs", count: 22, percentage: (22/135*100).toFixed(1), deltaHours: "33.00", fte: "4.13", monthlyCost: 20625 },
+        { classification: "< 7.5 hrs", count: 77, percentage: (77/135*100).toFixed(1), deltaHours: "115.50", fte: "14.44", monthlyCost: 72200 },
+        { classification: "At goal", count: 6, percentage: (6/135*100).toFixed(1), deltaHours: "0.00", fte: "0.00", monthlyCost: 0 },
+        { classification: "Over goal", count: 25, percentage: (25/135*100).toFixed(1), deltaHours: "0.00", fte: "0.00", monthlyCost: 0 }
+      ];
+      
+      // Calculate cumulative data for each tier
+      const cumulativeData = [
+        { 
+          tier: "< 7.5 hrs", 
+          employeeCount: 104, 
+          percentage: (104/135*100).toFixed(1),
+          deltaHours: "161.00",
+          fte: "20.13",
+          monthlyCost: 100625 // Sum of all costs
+        },
+        { 
+          tier: "< 6 hrs", 
+          employeeCount: 27, 
+          percentage: (27/135*100).toFixed(1),
+          deltaHours: "45.50",
+          fte: "5.69",
+          monthlyCost: 28425 // Sum of < 6 and < 5 costs
+        },
+        { 
+          tier: "< 5 hrs", 
+          employeeCount: 5, 
+          percentage: (5/135*100).toFixed(1),
+          deltaHours: "12.50",
+          fte: "1.56",
+          monthlyCost: 7800 // Just < 5 cost
+        }
+      ];
+      
+      // Generate sample employee data
+      const employeeData = [];
+      
+      // Add some sample employees in each category
+      const categories = [
+        { classification: "< 5 hrs", productiveHours: 3.2, meetingHours: 1.2 }, // 4.4 hours, delta 3.1
+        { classification: "< 6 hrs", productiveHours: 4.5, meetingHours: 1.0 }, // 5.5 hours, delta 2.0
+        { classification: "< 7.5 hrs", productiveHours: 6.0, meetingHours: 1.0 }, // 7.0 hours, delta 0.5
+        { classification: "At goal", productiveHours: 6.5, meetingHours: 1.0 }, // 7.5 hours, delta 0
+        { classification: "Over goal", productiveHours: 7.0, meetingHours: 1.5 }, // 8.5 hours, delta -1.0
+      ];
+      
+      for (let i = 0; i < 10; i++) {
+        const category = categories[i % categories.length];
+        const productiveHours = category.productiveHours + (Math.random() * 0.4 - 0.2); // Add small variation
+        const meetingHours = category.meetingHours + (Math.random() * 0.4 - 0.2);
+        const combinedHours = productiveHours + meetingHours;
+        const delta = 7.5 - combinedHours;
+        
+        employeeData.push({
+          employeeId: `EMP${i+1}`,
+          productiveHours,
+          meetingHours,
+          combinedHours,
+          delta,
+          classification: category.classification
+        });
+      }
+      
+      // Calculate totals
+      const totalDeltaHours = "161.00"; // Sum of all deltaHours from underperforming
+      const totalFTE = "20.13"; // totalDeltaHours / 8
+      const totalMonthlyCost = 100625; // FTE * (annualSalary / 12)
+      
+      setAnalysisResults({
+        classifications,
+        cumulativeData,
+        totalEmployees,
+        totalDeltaHours,
+        totalFTE,
+        totalMonthlyCost,
+        employeeData
+      });
+      
+      setLoading(false);
+    } catch (err) {
+      setError(`Error generating sample analysis: ${err.message}`);
+      setLoading(false);
+    }
+  };
+
+  const handleFileUpload = (event) => {
+    const uploadedFile = event.target.files[0];
+    if (uploadedFile) {
+      setFile(uploadedFile);
+      parseCSV(uploadedFile);
+    }
+  };
+
+  const parseCSV = (file) => {
+    setLoading(true);
+    setError(null);
+    
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      dynamicTyping: true,
+      complete: (results) => {
+        if (results.data && results.data.length > 0) {
+          setData(results.data);
+          setHeaders(Object.keys(results.data[0]));
+          setLoading(false);
+        } else {
+          setError("No data found in the CSV file.");
+          setLoading(false);
+        }
+      },
+      error: (error) => {
+        setError(`Error parsing CSV: ${error.message}`);
+        setLoading(false);
+      }
+    });
+  };
+
+  const handleColumnSelect = (columnType, columnName) => {
+    setSelectedColumns({
+      ...selectedColumns,
+      [columnType]: columnName
+    });
+  };
+
+  const analyzeData = () => {
+    try {
+      // Calculate the combined hours, delta, and classification for each employee
+      const employeeData = data.map(row => {
+        const productiveHours = parseFloat(row[selectedColumns.productiveHours]) || 0;
+        const meetingHours = parseFloat(row[selectedColumns.meetingHours]) || 0;
+        const combinedHours = productiveHours + meetingHours;
+        const delta = goalHours - combinedHours; // Positive delta means under goal
+        
+        // Classify based on combined hours
+        let classification;
+        if (combinedHours > goalHours + 0.01) classification = "Over goal";
+        else if (Math.abs(combinedHours - goalHours) <= 0.01) classification = "At goal"; // Very strict tolerance
+        else if (combinedHours < 5) classification = "< 5 hrs";
+        else if (combinedHours < 6) classification = "< 6 hrs";
+        else classification = `< ${goalHours} hrs`;
+        
+        return {
+          ...row,
+          combinedHours,
+          delta,
+          classification
+        };
+      });
+
+      // Group by classification
+      const grouped = _.groupBy(employeeData, 'classification');
+      
+      // Sort order for classifications
+      const sortOrder = {
+        "Over goal": 1,
+        "At goal": 2,
+        [`< ${goalHours} hrs`]: 3,
+        "< 6 hrs": 4,
+        "< 5 hrs": 5
+      };
+      
+      // Calculate metrics for each classification
+      let classifications = Object.keys(grouped).map(classification => {
+        const employees = grouped[classification];
+        const count = employees.length;
+        const percentage = ((count / employeeData.length) * 100).toFixed(1);
+        
+        // Calculate total delta hours (only for underperforming categories)
+        let deltaHours = 0;
+        if (classification !== "Over goal" && classification !== "At goal") {
+          deltaHours = employees.reduce((sum, emp) => sum + Math.max(0, emp.delta), 0);
+        }
+        
+        // Calculate FTE and cost
+        const fte = (deltaHours / 8).toFixed(2);
+        const monthlyCost = (deltaHours / 8) * (annualSalary / 12);
+        
+        return {
+          classification,
+          count,
+          percentage,
+          deltaHours: deltaHours.toFixed(2),
+          fte,
+          monthlyCost: Math.round(monthlyCost)
+        };
+      });
+      
+      // Sort classifications
+      classifications = _.sortBy(classifications, item => sortOrder[item.classification] || 999);
+      
+      // Calculate cumulative values for opportunity tiers
+      let cumulativeData = [];
+      
+      // Define tiers for accumulation (from most inclusive to least)
+      const tiers = [`< ${goalHours} hrs`, "< 6 hrs", "< 5 hrs"];
+      
+      // Process tiers
+      for (const tier of tiers) {
+        let tierEmployees = [];
+        
+        // Collect all employees in this tier and below
+        for (const classification of classifications) {
+          if (tier === `< ${goalHours} hrs` && 
+              ["< 5 hrs", "< 6 hrs", `< ${goalHours} hrs`].includes(classification.classification)) {
+            tierEmployees = tierEmployees.concat(grouped[classification.classification]);
+          } 
+          else if (tier === "< 6 hrs" && 
+                  ["< 5 hrs", "< 6 hrs"].includes(classification.classification)) {
+            tierEmployees = tierEmployees.concat(grouped[classification.classification]);
+          }
+          else if (tier === "< 5 hrs" && 
+                  classification.classification === "< 5 hrs") {
+            tierEmployees = tierEmployees.concat(grouped[classification.classification]);
+          }
+        }
+        
+        // Calculate metrics for this tier
+        const employeeCount = tierEmployees.length;
+        const percentage = ((employeeCount / employeeData.length) * 100).toFixed(1);
+        const deltaHours = tierEmployees.reduce((sum, emp) => sum + Math.max(0, emp.delta), 0);
+        const fte = (deltaHours / 8).toFixed(2);
+        const monthlyCost = Math.round((deltaHours / 8) * (annualSalary / 12));
+        
+        cumulativeData.push({
+          tier,
+          employeeCount,
+          percentage,
+          deltaHours: deltaHours.toFixed(2),
+          fte,
+          monthlyCost
+        });
+      }
+      
+      // Calculate totals
+      const totalEmployees = employeeData.length;
+      
+      // Get all employees below goal
+      const belowGoalEmployees = employeeData.filter(emp => 
+        emp.classification !== "Over goal" && emp.classification !== "At goal"
+      );
+      
+      const totalDeltaHours = belowGoalEmployees.reduce(
+        (sum, emp) => sum + Math.max(0, emp.delta), 0
+      ).toFixed(2);
+      
+      const totalFTE = (parseFloat(totalDeltaHours) / 8).toFixed(2);
+      const totalMonthlyCost = Math.round((parseFloat(totalDeltaHours) / 8) * (annualSalary / 12));
+      
+      setAnalysisResults({
+        classifications,
+        cumulativeData,
+        totalEmployees,
+        totalDeltaHours,
+        totalFTE,
+        totalMonthlyCost,
+        employeeData: employeeData.slice(0, 10) // Just include a sample for review
+      });
+    } catch (err) {
+      setError(`Analysis error: ${err.message}`);
+    }
+  };
+
+  // Format currency
+  const formatCurrency = (value) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(value);
+  };
+
+  return (
+    <div className="p-6 max-w-6xl mx-auto bg-white rounded-lg shadow-lg">
+      {/* Header with ActivTrak styling */}
+      <div className="flex justify-between items-center mb-6 border-b pb-4" style={{ borderColor: ACTIVTRAK_PRIMARY }}>
+        <div className="flex items-center">
+          {/* ActivTrak Logo */}
+          <div className="w-10 h-10 rounded-full mr-3 flex items-center justify-center text-white" style={{ backgroundColor: ACTIVTRAK_PRIMARY }}>
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold" style={{ color: TEXT_COLOR }}>ActivTrak Productivity Examiner</h1>
+        </div>
+      </div>
+
+      {/* Settings Panel */}
+      <div className="mb-8 p-4 bg-gray-50 rounded-lg">
+        <h2 className="text-lg font-semibold mb-4" style={{ color: TEXT_COLOR }}>Analysis Settings</h2>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className="block mb-2 font-medium">Productivity Goal (hours/day)</label>
+            <input
+              type="number"
+              min="1"
+              max="24"
+              step="0.1"
+              value={goalHours}
+              onChange={(e) => setGoalHours(Number(e.target.value))}
+              className="w-full px-3 py-2 border rounded"
+            />
+          </div>
+          
+          <div>
+            <label className="block mb-2 font-medium">Annual Salary for Cost Calculation ($)</label>
+            <input
+              type="number"
+              min="10000"
+              step="1000"
+              value={annualSalary}
+              onChange={(e) => setAnnualSalary(Number(e.target.value))}
+              className="w-full px-3 py-2 border rounded"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* File Upload and Column Selection */}
+      <div className="mb-8 p-4 bg-gray-50 rounded-lg">
+        <h2 className="text-lg font-semibold mb-4" style={{ color: TEXT_COLOR }}>Upload and Configure Data</h2>
+        
+        <div className="mb-4">
+          <label className="block mb-2 font-medium">Upload CSV File</label>
+          <div className="flex space-x-2">
+            <input
+              type="file"
+              accept=".csv"
+              onChange={handleFileUpload}
+              className="w-full px-3 py-2 border rounded"
+            />
+            <button
+              onClick={() => setFile({name: "demo"})}
+              className="px-3 py-2 text-white rounded font-medium"
+              style={{ backgroundColor: ACTIVTRAK_SECONDARY }}
+            >
+              Use Sample Data
+            </button>
+          </div>
+        </div>
+        
+        {headers.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block mb-2 font-medium">Productive Hours Column</label>
+              <select
+                value={selectedColumns.productiveHours}
+                onChange={(e) => handleColumnSelect('productiveHours', e.target.value)}
+                className="w-full px-3 py-2 border rounded"
+              >
+                <option value="">-- Select Column --</option>
+                {headers.map(header => (
+                  <option key={`prod-${header}`} value={header}>{header}</option>
+                ))}
+              </select>
+            </div>
+            
+            <div>
+              <label className="block mb-2 font-medium">Meeting Hours Column</label>
+              <select
+                value={selectedColumns.meetingHours}
+                onChange={(e) => handleColumnSelect('meetingHours', e.target.value)}
+                className="w-full px-3 py-2 border rounded"
+              >
+                <option value="">-- Select Column --</option>
+                {headers.map(header => (
+                  <option key={`meet-${header}`} value={header}>{header}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+        
+        <button
+          onClick={analyzeData}
+          disabled={!data || !selectedColumns.productiveHours || !selectedColumns.meetingHours}
+          className="px-4 py-2 text-white rounded font-medium"
+          style={{ 
+            backgroundColor: !data || !selectedColumns.productiveHours || !selectedColumns.meetingHours ? '#ccc' : ACTIVTRAK_PRIMARY,
+            cursor: !data || !selectedColumns.productiveHours || !selectedColumns.meetingHours ? 'not-allowed' : 'pointer'
+          }}
+        >
+          Analyze Data
+        </button>
+      </div>
+      
+      {/* Error Message */}
+      {error && (
+        <div className="mb-6 p-4 bg-red-100 border-l-4 border-red-500 text-red-700">
+          <p>{error}</p>
+        </div>
+      )}
+
+      {/* Loading Indicator */}
+      {loading && (
+        <div className="flex justify-center items-center h-40">
+          <div className="text-lg font-semibold text-gray-700">Processing data...</div>
+        </div>
+      )}
+
+      {/* Analysis Results */}
+      {analysisResults && (
+        <div>
+          <h2 className="text-xl font-bold mb-4" style={{ color: ACTIVTRAK_PRIMARY }}>
+            Productivity Distribution (Goal: {goalHours} hrs.)
+          </h2>
+          
+          {/* Productivity Distribution Chart */}
+          <div className="mb-8 bg-gray-50 p-4 rounded-lg">
+            <h3 className="text-lg font-semibold mb-4" style={{ color: TEXT_COLOR }}>Workforce Distribution</h3>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={analysisResults.classifications}
+                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="classification" />
+                  <YAxis yAxisId="left" orientation="left" label={{ value: 'Employee Count', angle: -90, position: 'insideLeft' }} />
+                  <YAxis yAxisId="right" orientation="right" label={{ value: '% of Workforce', angle: 90, position: 'insideRight' }} />
+                  <Tooltip formatter={(value, name) => {
+                    if (name === "count") return [`${value} employees`, "Count"];
+                    if (name === "percentage") return [`${value}%`, "Percentage"];
+                    return [value, name];
+                  }} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="count" name="Employee Count" fill={ACTIVTRAK_PRIMARY} />
+                  <Bar yAxisId="right" dataKey="percentage" name="% of Workforce" fill={ACTIVTRAK_SECONDARY} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          
+          {/* Productivity Distribution Table */}
+          <div className="mb-8 overflow-x-auto">
+            <h3 className="text-lg font-semibold mb-4" style={{ color: TEXT_COLOR }}>Productivity Categories</h3>
+            <table className="min-w-full bg-white border border-gray-200">
+              <thead>
+                <tr style={{ backgroundColor: ACTIVTRAK_PRIMARY }}>
+                  <th className="p-3 text-left text-white border-b">Category</th>
+                  <th className="p-3 text-right text-white border-b">Employee Count</th>
+                  <th className="p-3 text-right text-white border-b">% of Workforce</th>
+                  <th className="p-3 text-right text-white border-b">Delta Hours</th>
+                  <th className="p-3 text-right text-white border-b">FTE</th>
+                  <th className="p-3 text-right text-white border-b">Monthly Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analysisResults.classifications.map((item, index) => (
+                  <tr key={item.classification} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
+                    <td className="p-3 border-b font-medium">{item.classification}</td>
+                    <td className="p-3 border-b text-right">{item.count}</td>
+                    <td className="p-3 border-b text-right">{item.percentage}%</td>
+                    <td className="p-3 border-b text-right">{item.deltaHours}</td>
+                    <td className="p-3 border-b text-right">{item.fte}</td>
+                    <td className="p-3 border-b text-right">{formatCurrency(item.monthlyCost)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-gray-100 font-semibold">
+                  <td className="p-3 border-t">Total</td>
+                  <td className="p-3 border-t text-right">{analysisResults.totalEmployees}</td>
+                  <td className="p-3 border-t text-right">100%</td>
+                  <td className="p-3 border-t text-right">{analysisResults.totalDeltaHours}</td>
+                  <td className="p-3 border-t text-right">{analysisResults.totalFTE}</td>
+                  <td className="p-3 border-t text-right">{formatCurrency(analysisResults.totalMonthlyCost)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          
+          {/* Productivity Opportunity (Cumulative) */}
+          <div className="mb-8">
+            <h2 className="text-xl font-bold mb-4" style={{ color: ACTIVTRAK_PRIMARY }}>
+              Productivity Opportunity
+            </h2>
+            
+            <div className="mb-4 p-4 bg-gray-50 rounded-lg">
+              <p className="mb-2">
+                This analysis shows the <strong>cumulative impact</strong> of addressing productivity gaps, 
+                starting from the most severe cases.
+              </p>
+            </div>
+            
+            <table className="min-w-full bg-white border border-gray-200">
+              <thead>
+                <tr style={{ backgroundColor: ACTIVTRAK_SECONDARY }}>
+                  <th className="p-3 text-left text-white border-b">Categories Included</th>
+                  <th className="p-3 text-right text-white border-b">Employee Count</th>
+                  <th className="p-3 text-right text-white border-b">% of Workforce</th>
+                  <th className="p-3 text-right text-white border-b">Total Delta Hours</th>
+                  <th className="p-3 text-right text-white border-b">FTE</th>
+                  <th className="p-3 text-right text-white border-b">Monthly Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analysisResults.cumulativeData.map((item, index) => (
+                  <tr key={item.tier} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
+                    <td className="p-3 border-b font-medium">{item.tier}</td>
+                    <td className="p-3 border-b text-right">{item.employeeCount}</td>
+                    <td className="p-3 border-b text-right">{item.percentage}%</td>
+                    <td className="p-3 border-b text-right">{item.deltaHours}</td>
+                    <td className="p-3 border-b text-right">{item.fte}</td>
+                    <td className="p-3 border-b text-right">{formatCurrency(item.monthlyCost)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          
+          {/* Methodology and Data Sample */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <div className="bg-gray-50 p-4 rounded-lg">
+              <h3 className="text-lg font-semibold mb-2" style={{ color: TEXT_COLOR }}>Calculation Methodology</h3>
+              <ul className="list-disc pl-5 space-y-1">
+                <li>Combined Hours = Productive Hours + Meeting Hours</li>
+                <li>Delta = Goal Hours ({goalHours}) - Combined Hours</li>
+                <li>Classifications:
+                <ul className="list-circle pl-5">
+                  <li><strong>Over goal</strong>: Combined Hours > Goal Hours</li>
+                  <li><strong>At goal</strong>: Combined Hours = Goal Hours (exactly)</li>
+                  <li><strong>&lt; 7.5 hrs</strong>: 6 ≤ Combined Hours &lt; Goal Hours</li>
+                  <li><strong>&lt; 6 hrs</strong>: 5 ≤ Combined Hours &lt; 6</li>
+                  <li><strong>&lt; 5 hrs</strong>: Combined Hours &lt; 5</li>
+                </ul>
+              </li>
+                <li>FTE = Delta Hours ÷ 8</li>
+                <li>Monthly Cost = FTE × (${annualSalary.toLocaleString()} ÷ 12)</li>
+              </ul>
+            </div>
+            
+      <div className="bg-gray-50 p-4 rounded-lg">
+              <h3 className="text-lg font-semibold mb-2" style={{ color: TEXT_COLOR }}>Key Insights</h3>
+              <ul className="list-disc pl-5 space-y-1">
+                <li><strong>{analysisResults.totalFTE} FTE</strong> of untapped productivity potential across all categories</li>
+                <li>Total monthly cost impact: <strong>{formatCurrency(analysisResults.totalMonthlyCost)}</strong></li>
+                <li>The largest opportunity group is <strong>{analysisResults.classifications[2]?.classification}</strong> with {analysisResults.classifications[2]?.count} employees ({analysisResults.classifications[2]?.percentage}%)</li>
+                <li>Total of <strong>{analysisResults.cumulativeData[0]?.employeeCount || 0} employees</strong> below productivity goal</li>
+                <li>Addressing productivity gaps would recover <strong>{analysisResults.totalDeltaHours}</strong> hours</li>
+              </ul>
+            </div>
+          </div>
+          
+          {/* Data Sample */}
+          <div className="mb-8">
+            <h3 className="text-lg font-semibold mb-4" style={{ color: TEXT_COLOR }}>Data Sample (First 10 Records)</h3>
+            <div className="overflow-x-auto">
+              <table className="min-w-full bg-white border border-gray-200 text-sm">
+                <thead>
+                  <tr style={{ backgroundColor: '#f3f4f6' }}>
+                    <th className="p-2 text-left border-b">Employee</th>
+                    <th className="p-2 text-right border-b">Productive Hours</th>
+                    <th className="p-2 text-right border-b">Meeting Hours</th>
+                    <th className="p-2 text-right border-b">Combined Hours</th>
+                    <th className="p-2 text-right border-b">Delta</th>
+                    <th className="p-2 text-left border-b">Classification</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analysisResults.employeeData.map((emp, index) => (
+                    <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      <td className="p-2 border-b">Employee {index + 1}</td>
+                      <td className="p-2 border-b text-right">
+                        {emp.productiveHours?.toFixed(2) || 
+                         (selectedColumns.productiveHours && emp[selectedColumns.productiveHours]?.toFixed(2)) || 
+                         0}
+                      </td>
+                      <td className="p-2 border-b text-right">
+                        {emp.meetingHours?.toFixed(2) || 
+                         (selectedColumns.meetingHours && emp[selectedColumns.meetingHours]?.toFixed(2)) || 
+                         0}
+                      </td>
+                      <td className="p-2 border-b text-right">{emp.combinedHours?.toFixed(2)}</td>
+                      <td className="p-2 border-b text-right">{emp.delta?.toFixed(2)}</td>
+                      <td className="p-2 border-b">{emp.classification}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      <div className="mt-6 text-sm text-gray-500 text-center">
+        ActivTrak Productivity Examiner | Data analysis based on CSV upload
+      </div>
+    </div>
+  );
+};
+
+export default ActivTrakProductivityExaminer;
